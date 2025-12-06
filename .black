@@ -1,0 +1,3 @@
+[black]
+max-line-length = 150
+exclude = .venv
