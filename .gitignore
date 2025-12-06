@@ -1,0 +1,5 @@
+.venv/
+.env
+*.mako
+*.pyc
+*.python-version

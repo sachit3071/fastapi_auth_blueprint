@@ -1,0 +1,200 @@
+@startuml Authentication System
+
+skinparam backgroundColor #FFFFFF
+skinparam roundcorner 10
+skinparam sequenceArrowThickness 2
+
+title Authentication System - Complete Flow
+
+actor User as user
+participant "Frontend" as frontend
+participant "Endpoint" as endpoint
+participant "Service" as service
+database "Database" as database
+
+== User Registration ==
+
+user -> frontend: Navigate to /auth/signup
+frontend -> endpoint: GET /auth/signup
+endpoint -> endpoint: Check session cookie
+endpoint -> frontend: Render signup.html
+frontend -> user: Display signup form
+
+user -> frontend: Fill form & submit\n(email, username, password)
+frontend -> endpoint: POST /auth/signup
+endpoint -> service: get_user_by_email(email)
+service -> database: SELECT * FROM users\nWHERE email = ?
+database -> service: Return result
+service -> endpoint: User exists or None
+
+alt Email already exists
+    endpoint -> frontend: Render with error message
+    frontend -> user: Show "Email already registered"
+else Email available
+    endpoint -> service: get_user_by_username(username)
+    service -> database: SELECT * FROM users\nWHERE username = ?
+    database -> service: Return result
+    service -> endpoint: User exists or None
+    
+    alt Username taken
+        endpoint -> frontend: Render with error message
+        frontend -> user: Show "Username already taken"
+    else Username available
+        endpoint -> service: hash_password(password)
+        service -> service: bcrypt.hashpw(password)
+        service -> endpoint: hashed_password
+        
+        endpoint -> service: create_user(user_data)
+        service -> database: INSERT INTO users\n(email, username, password, ...)
+        database -> service: new_user
+        service -> endpoint: new_user
+        
+        endpoint -> service: create_access_token(user_id, email)
+        service -> service: jwt.encode(payload, SECRET_KEY)
+        service -> endpoint: JWT token
+        
+        endpoint -> frontend: Set HttpOnly cookie\nRedirect to /dashboard
+        frontend -> user: Navigate to dashboard
+    end
+end
+
+== User Login ==
+
+user -> frontend: Navigate to /auth/signin
+frontend -> endpoint: GET /auth/signin
+endpoint -> endpoint: Check session cookie
+endpoint -> frontend: Render signin.html
+frontend -> user: Display signin form
+
+user -> frontend: Enter email & password
+frontend -> endpoint: POST /auth/signin
+endpoint -> service: get_user_by_email(email)
+service -> database: SELECT * FROM users\nWHERE email = ?
+database -> service: Return user
+service -> endpoint: user
+
+alt User not found
+    endpoint -> frontend: Render with error
+    frontend -> user: Show "Incorrect credentials"
+else User found
+    endpoint -> service: verify_password(password, user.password)
+    service -> service: bcrypt.checkpw(password, hash)
+    service -> endpoint: is_valid
+    
+    alt Invalid password
+        endpoint -> frontend: Render with error
+        frontend -> user: Show "Incorrect credentials"
+    else Valid password
+        alt User inactive
+            endpoint -> frontend: Render with error
+            frontend -> user: Show "Account deactivated"
+        else User active
+            endpoint -> service: update_last_login(user_id)
+            service -> database: UPDATE users\nSET last_login = NOW()
+            database -> service: Success
+            
+            endpoint -> service: create_access_token(user_id, email)
+            service -> service: jwt.encode(payload, SECRET_KEY)
+            service -> endpoint: JWT token
+            
+            endpoint -> frontend: Set HttpOnly cookie\nRedirect to /dashboard
+            frontend -> user: Navigate to dashboard
+        end
+    end
+end
+
+== Access Protected Page ==
+
+user -> frontend: Navigate to /dashboard
+frontend -> endpoint: GET /dashboard\n(with cookie)
+endpoint -> service: decode_access_token(token)
+service -> service: jwt.decode(token, SECRET_KEY)
+
+alt Token invalid/expired
+    service -> endpoint: Raise exception
+    endpoint -> frontend: Redirect to /auth/signin
+    frontend -> user: Show signin page
+else Token valid
+    service -> endpoint: payload (user_id, email)
+    endpoint -> service: get_user_by_id(user_id)
+    service -> database: SELECT * FROM users\nWHERE id = ?
+    database -> service: user
+    service -> endpoint: user
+    
+    alt User not found
+        endpoint -> frontend: Redirect to /auth/signin
+        frontend -> user: Show signin page
+    else User found
+        endpoint -> frontend: Render dashboard.html\n(with user data)
+        frontend -> user: Display dashboard
+    end
+end
+
+== Change Password ==
+
+user -> frontend: Navigate to /auth/profile
+frontend -> endpoint: GET /auth/profile\n(with cookie)
+endpoint -> service: decode_access_token(token)
+service -> endpoint: user_id
+endpoint -> service: get_user_by_id(user_id)
+service -> database: SELECT * FROM users\nWHERE id = ?
+database -> service: user
+service -> endpoint: user
+endpoint -> frontend: Render profile.html
+frontend -> user: Display profile page
+
+user -> frontend: Submit password change form
+frontend -> endpoint: POST /auth/change-password\n(old_password, new_password)
+endpoint -> endpoint: Validate password length\n& confirmation match
+
+alt Validation fails
+    endpoint -> frontend: Render with error
+    frontend -> user: Show validation error
+else Validation passes
+    endpoint -> service: verify_password(old_password, user.password)
+    service -> service: bcrypt.checkpw()
+    service -> endpoint: is_valid
+    
+    alt Old password incorrect
+        endpoint -> frontend: Render with error
+        frontend -> user: Show "Incorrect current password"
+    else Old password correct
+        endpoint -> service: hash_password(new_password)
+        service -> service: bcrypt.hashpw()
+        service -> endpoint: new_hashed_password
+        
+        endpoint -> service: update_password(user_id, new_hash)
+        service -> database: UPDATE users\nSET password = ?
+        database -> service: Success
+        service -> endpoint: Success
+        
+        endpoint -> frontend: Render with success message
+        frontend -> user: Show "Password changed successfully"
+    end
+end
+
+== Logout ==
+
+user -> frontend: Click logout button
+frontend -> endpoint: GET /auth/signout
+endpoint -> frontend: Delete cookie\nRedirect to /auth/signin
+frontend -> user: Show signin page
+
+== Email Availability Check ==
+
+user -> frontend: Type email in signup form
+frontend -> endpoint: GET /auth/email_status/{email}
+endpoint -> service: get_user_by_email(email)
+service -> database: SELECT * FROM users\nWHERE email = ?
+database -> service: user or None
+service -> endpoint: exists status
+
+alt Email exists
+    endpoint -> frontend: JSON {"exists": true}
+    frontend -> user: Show "Email taken" indicator
+else Email available
+    endpoint -> frontend: JSON {"exists": false}
+    frontend -> user: Show "Email available" indicator
+end
+
+@enduml
